@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.keystore
+app/build/
+.kotlin/
+# Personal habit drafts, only ever pushed to a phone over adb.
+journal-seed/

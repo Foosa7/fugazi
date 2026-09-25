@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only override: lets `adb am start` launch the intervention screen for
+  visual testing. The production (main) manifest keeps it exported=false.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <activity
+            android:name=".ui.InterventionActivity"
+            android:exported="true"
+            tools:replace="android:exported" />
+    </application>
+</manifest>
