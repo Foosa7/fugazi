@@ -59,9 +59,11 @@ object SignalStore {
         }.associateBy { it.date } else emptyMap()
     }
 
-    suspend fun put(ds: List<DaySignals>) = withContext(Dispatchers.IO) {
-        if (ds.isEmpty()) return@withContext
+    suspend fun put(all: List<DaySignals>) = withContext(Dispatchers.IO) {
         mutex.withLock {
+            // A retried day that read the same as before would only add a duplicate line.
+            val ds = all.filter { d -> _days.value[d.date]?.copy(t = d.t) != d }
+            if (ds.isEmpty()) return@withLock
             file.appendText(ds.joinToString("") { JournalStore.json.encodeToString(DaySignals.serializer(), it) + "\n" })
             _days.value = _days.value + ds.associateBy { it.date }
         }

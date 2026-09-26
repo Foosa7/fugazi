@@ -26,6 +26,8 @@ data class Habit(
     val ladder: List<Rung> = emptyList(),
     /** Asked when the habit is going well. Null uses a default. */
     val winAsk: String? = null,
+    /** STATE only: one-tap answers to "What put you there?". Empty uses [DEFAULT_INGREDIENTS]. */
+    val ingredients: List<String> = emptyList(),
     /** Mark this habit done automatically from passive signals. Null = manual only. */
     val auto: AutoRule? = null,
     /** yyyy-MM-dd, the day the habit started counting. */
@@ -61,6 +63,13 @@ enum class Kind {
 
     /** Something you want less of: doomscrolling. Lapse = slips within a recent window. */
     @SerialName("avoid") AVOID,
+
+    /**
+     * A state of mind you want to live in more ("calm and present"). You tap the days you
+     * touched it, with a note on what put you there. Days without it aren't misses: no
+     * "not done", no win streaks — the ladder only asks, gently, after a long stretch away.
+     */
+    @SerialName("state") STATE,
 }
 
 /** "[times] per [days] days". Daily is 1/1; talk to a stranger twice a week is 2/7. */
@@ -101,6 +110,8 @@ data class Event(
     /** For win triggers: the days-clean / days-on-pace milestone it celebrates. */
     val days: Int? = null,
     val text: String? = null,
+    /** STATE: which ingredients you tapped, kept apart from [text] so they can be counted. */
+    val tags: List<String> = emptyList(),
     /** "auto" when written from passive signals rather than by you. */
     val src: String? = null,
 )
@@ -124,6 +135,11 @@ enum class EventType {
 }
 
 const val WIN_RUNG = -1
+
+/** Things the research (and race day) suggest can put you in a state; edit them per habit. */
+val DEFAULT_INGREDIENTS = listOf("Hard effort", "Awe", "A stranger", "Giving", "Flow", "No phone", "Good sleep")
+
+fun Habit.ingredientsOrDefault(): List<String> = ingredients.ifEmpty { DEFAULT_INGREDIENTS }
 const val DEFAULT_WIN_ASK = "This is going well. What's making it work?"
 
 fun nowStamp(): String =

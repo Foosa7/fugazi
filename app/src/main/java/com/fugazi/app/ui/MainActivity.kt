@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -30,12 +31,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.fugazi.app.ai.AiSettings
+import androidx.activity.result.IntentSenderRequest
+import androidx.lifecycle.lifecycleScope
+import com.fugazi.app.sync.DriveSync
+import com.fugazi.app.sync.SyncWorker
+import com.google.android.gms.auth.api.identity.Identity
+import com.fugazi.app.ai.Reflector
 import com.fugazi.app.journal.Event
 import com.fugazi.app.journal.EventType
 import com.fugazi.app.journal.Habit
@@ -73,14 +82,37 @@ class MainActivity : ComponentActivity() {
     private val requestHealth =
         registerForActivityResult(PermissionController.createRequestPermissionResultContract()) { }
 
+    // Google's "let fugazi use Drive" screen.
+    private val requestDrive =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+            val r = runCatching { Identity.getAuthorizationClient(this).getAuthorizationResultFromIntent(res.data) }.getOrNull()
+            if (r != null) lifecycleScope.launch { DriveSync.onAuthorized(this@MainActivity, r) }
+        }
+
+    fun connectDrive() {
+        lifecycleScope.launch {
+            runCatching { DriveSync.connect(this@MainActivity) }
+                .onSuccess { pi -> pi?.let { requestDrive.launch(IntentSenderRequest.Builder(it.intentSender).build()) } }
+                .onFailure { DriveSync.refreshStatus(this@MainActivity) }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Whatever you just wrote goes to Drive within a minute of leaving.
+        SyncWorker.soon(this)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             FugaziTheme {
                 App(
+                    startTab = if (intent.getBooleanExtra(Reflector.EXTRA_OPEN_REFLECT, false)) 2 else 0,
                     onAskNotifications = ::askNotifications,
                     onAskHealth = { requestHealth.launch(Sleep.wantedPermissions(this)) },
+                    onConnectDrive = ::connectDrive,
                 )
             }
         }
@@ -106,15 +138,17 @@ private sealed interface Screen {
 }
 
 @Composable
-private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
+private fun App(startTab: Int, onAskNotifications: () -> Unit, onAskHealth: () -> Unit, onConnectDrive: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val habits by JournalStore.habits.collectAsState()
     val events by JournalStore.events.collectAsState()
     var screen by remember { mutableStateOf<Screen>(Screen.Home) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(startTab) }
     val resumes = rememberResumeCount()
+    val driveStatus by DriveSync.status.collectAsState()
+    LaunchedEffect(resumes) { DriveSync.refreshStatus(context) }
 
     // Opening the app runs the same check the background worker does, so a check-in is
     // never only as fresh as the last time Android let the worker run. It deliberately
@@ -152,7 +186,7 @@ private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
         bottomBar = {
             if (screen == Screen.Home) {
                 NavigationBar {
-                    listOf("Habits" to "✓", "Thoughts" to "✎").forEachIndexed { i, (label, glyph) ->
+                    listOf("Habits" to "✓", "Thoughts" to "✎", "Reflect" to "✦").forEachIndexed { i, (label, glyph) ->
                         NavigationBarItem(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -164,9 +198,12 @@ private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        // Consumed so the Thoughts page, which pads for the keyboard, doesn't also count the nav bar.
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             when (val s = screen) {
-                Screen.Home -> if (tab == 1) ThoughtsScreen() else HomeScreen(
+                Screen.Home -> if (tab == 1) ThoughtsScreen()
+                else if (tab == 2) ReflectScreen(onSettings = { screen = Screen.Settings })
+                else HomeScreen(
                     states = states,
                     pending = pending,
                     today = today,
@@ -174,7 +211,7 @@ private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
                     onToggle = { h, d ->
                         val st = states.first { it.habit.id == h.id }
                         val type = when (h.kind) {
-                            Kind.DO -> if (d in st.done) EventType.UNDONE else EventType.DONE
+                            Kind.DO, Kind.STATE -> if (d in st.done) EventType.UNDONE else EventType.DONE
                             Kind.AVOID -> if (d in st.slips) EventType.UNSLIP else EventType.SLIP
                         }
                         log(Event(t = nowStamp(), habit = h.id, type = type, date = d.toString()))
@@ -185,6 +222,9 @@ private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
                                 snackbar.showSnackbar("${h.name} ✓  ${h.why}")
                             }
                         }
+                    },
+                    onFelt = { h, d, tags, note ->
+                        log(Event(t = nowStamp(), habit = h.id, type = EventType.DONE, date = d.toString(), text = note.ifBlank { null }, tags = tags))
                     },
                     onSkip = { h, d, reason ->
                         log(Event(t = nowStamp(), habit = h.id, type = EventType.SKIP, date = d.toString(), text = reason))
@@ -231,6 +271,24 @@ private fun App(onAskNotifications: () -> Unit, onAskHealth: () -> Unit) {
                                 Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                             )
                         },
+                        aiKey = AiSettings.key(context),
+                        aiDaily = AiSettings.daily(context),
+                        onAiKey = { AiSettings.setKey(context, it) },
+                        onAiDaily = { AiSettings.setDaily(context, it) },
+                        aiModel = AiSettings.model(context),
+                        aiEffort = AiSettings.effort(context),
+                        onAiModel = { AiSettings.setModel(context, it) },
+                        onAiEffort = { AiSettings.setEffort(context, it) },
+                        drive = driveStatus,
+                        onDriveConnect = onConnectDrive,
+                        onDriveSyncNow = { scope.launch { DriveSync.sync(context) } },
+                        onDriveKeepPhone = { scope.launch { DriveSync.overwriteBackup(context) } },
+                        onDriveRestore = {
+                            scope.launch {
+                                DriveSync.restore(context).onSuccess { restartApp(context) }
+                            }
+                        },
+                        onDriveDisconnect = { DriveSync.disconnect(context) },
                         onBack = { screen = Screen.Home },
                     )
                 }
@@ -272,6 +330,17 @@ private fun rememberResumeCount(): Int {
         onDispose { owner.lifecycle.removeObserver(obs) }
     }
     return n
+}
+
+/**
+ * After a restore the journal on disk is new, but the stores already loaded the old one.
+ * Starting over is the simplest way to be sure nothing shows a stale copy.
+ */
+private fun restartApp(context: Context) {
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    context.startActivity(intent)
+    Runtime.getRuntime().exit(0)
 }
 
 private fun openHealthConnect(context: Context) {

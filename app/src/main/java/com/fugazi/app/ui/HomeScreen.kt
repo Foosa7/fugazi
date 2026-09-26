@@ -36,6 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.fugazi.app.journal.ingredientsOrDefault
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -46,6 +51,8 @@ import com.fugazi.app.journal.HabitState
 import com.fugazi.app.journal.Kind
 import com.fugazi.app.journal.describe
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.temporal.WeekFields
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -63,6 +70,7 @@ fun HomeScreen(
     today: LocalDate,
     health: Health,
     onToggle: (Habit, LocalDate) -> Unit,
+    onFelt: (Habit, LocalDate, List<String>, String) -> Unit,
     onSkip: (Habit, LocalDate, String) -> Unit,
     onAnswer: (Event, String) -> Unit,
     onDismiss: (Event) -> Unit,
@@ -73,6 +81,7 @@ fun HomeScreen(
     onFixNotifications: () -> Unit,
 ) {
     var skipping by remember { mutableStateOf<Pair<Habit, LocalDate>?>(null) }
+    var feeling by remember { mutableStateOf<Pair<Habit, LocalDate>?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -86,6 +95,13 @@ fun HomeScreen(
                 TextButton(onClick = onExport) { Text("Export") }
                 Button(onClick = { onOpen(null) }) { Text("+ Habit") }
             }
+            // The week you're in, the way a Swedish calendar numbers it (ISO: weeks start Monday).
+            Text(
+                "Week ${today.get(WeekFields.ISO.weekOfWeekBasedYear())} · ${today.format(DateTimeFormatter.ofPattern("EEEE d MMMM"))}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
             HealthLine(health, onFixBattery, onFixNotifications)
         }
 
@@ -108,11 +124,22 @@ fun HomeScreen(
             HabitRow(
                 s,
                 today,
-                onToggle = { d -> onToggle(s.habit, d) },
+                onToggle = { d ->
+                    // Marking a state asks what put you there; un-marking it is just a tap.
+                    if (s.habit.kind == Kind.STATE && d !in s.done) feeling = s.habit to d
+                    else onToggle(s.habit, d)
+                },
                 onLongPress = { d -> skipping = s.habit to d },
                 onOpen = { onOpen(s.habit) },
             )
         }
+    }
+
+    feeling?.let { (h, d) ->
+        FeltDialog(h, d, onDone = { felt ->
+            if (felt != null) onFelt(h, d, felt.first, felt.second)
+            feeling = null
+        })
     }
 
     skipping?.let { (h, d) ->
@@ -241,7 +268,7 @@ private fun HabitRow(
                 )
             }
             week(today).forEach { d ->
-                val marked = if (h.kind == Kind.DO) d in s.done else d in s.slips
+                val marked = if (h.kind == Kind.AVOID) d in s.slips else d in s.done
                 val skipped = d in s.skips
                 val future = d.isAfter(today)
                 Box(
@@ -289,9 +316,46 @@ private fun Dot(kind: Kind, marked: Boolean, skipped: Boolean) {
             Text("–", style = MaterialTheme.typography.labelSmall, color = c.outline)
         }
         marked && kind == Kind.DO -> Box(mod.background(c.primary, CircleShape))
+        marked && kind == Kind.STATE -> Box(
+            mod.background(Brush.linearGradient(listOf(Color(0xFFFFB199), Color(0xFFC89BE8))), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) { Text("✦", style = MaterialTheme.typography.labelSmall, color = Color(0xFF3B1F1A)) }
         marked -> Box(mod.background(c.error, CircleShape))
         else -> Box(mod.border(2.dp, c.outlineVariant, CircleShape))
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FeltDialog(h: Habit, d: LocalDate, onDone: (Pair<List<String>, String>?) -> Unit) {
+    var note by remember { mutableStateOf("") }
+    val picked = remember { mutableStateListOf<String>() }
+    AlertDialog(
+        onDismissRequest = { onDone(null) },
+        title = { Text("✦ ${h.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (h.why.isNotBlank()) Text(h.why, style = MaterialTheme.typography.bodySmall)
+                Text("What put you there?", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    h.ingredientsOrDefault().forEach { tag ->
+                        FilterChip(
+                            selected = tag in picked,
+                            onClick = { if (tag in picked) picked.remove(tag) else picked.add(tag) },
+                            label = { Text(tag) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    note, { note = it },
+                    placeholder = { Text("Anything else, in your words") },
+                    minLines = 2,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onDone(picked.toList() to note.trim()) }) { Text("I felt it") } },
+        dismissButton = { TextButton(onClick = { onDone(null) }) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -322,6 +386,12 @@ private fun status(s: HabitState, today: LocalDate): String {
             else -> "${s.lapse} days since"
         }
         Kind.AVOID -> if (s.lapse == 1) "1 day clean" else "${s.lapse} days clean"
+        Kind.STATE -> when {
+            today in s.done -> "Felt it today"
+            s.done.isEmpty() -> "Tap the days you touch it"
+            s.lapse == 1 -> "Felt it yesterday"
+            else -> "Last felt ${s.lapse} days ago"
+        }
     }
     return listOfNotNull(base, rung).joinToString(" · ")
 }

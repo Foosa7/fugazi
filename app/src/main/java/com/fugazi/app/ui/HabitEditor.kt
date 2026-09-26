@@ -40,6 +40,7 @@ import com.fugazi.app.journal.Event
 import com.fugazi.app.journal.EventType
 import com.fugazi.app.journal.Habit
 import com.fugazi.app.journal.Kind
+import com.fugazi.app.journal.DEFAULT_INGREDIENTS
 import com.fugazi.app.journal.Rung
 import com.fugazi.app.journal.Target
 import com.fugazi.app.journal.WIN_RUNG
@@ -82,6 +83,9 @@ fun HabitEditor(
     var why by remember { mutableStateOf(existing?.why.orEmpty()) }
     var goal by remember { mutableStateOf(existing?.goal.orEmpty()) }
     var winAsk by remember { mutableStateOf(existing?.winAsk.orEmpty()) }
+    var ingredients by remember {
+        mutableStateOf((existing?.ingredients?.ifEmpty { null } ?: DEFAULT_INGREDIENTS).joinToString(", "))
+    }
     var autoType by remember { mutableStateOf(existing?.auto?.type) }
     var autoMinutes by remember { mutableStateOf((existing?.auto?.minutes ?: 30).toString()) }
     val ladder = remember {
@@ -106,15 +110,27 @@ fun HabitEditor(
             SegmentedButton(
                 selected = kind == Kind.DO,
                 onClick = { kind = Kind.DO },
-                shape = SegmentedButtonDefaults.itemShape(0, 2),
+                shape = SegmentedButtonDefaults.itemShape(0, 3),
             ) { Text("Do more") }
             SegmentedButton(
                 selected = kind == Kind.AVOID,
                 onClick = { kind = Kind.AVOID },
-                shape = SegmentedButtonDefaults.itemShape(1, 2),
+                shape = SegmentedButtonDefaults.itemShape(1, 3),
             ) { Text("Do less") }
+            SegmentedButton(
+                selected = kind == Kind.STATE,
+                onClick = { kind = Kind.STATE },
+                shape = SegmentedButtonDefaults.itemShape(2, 3),
+            ) { Text("A state") }
         }
 
+        if (kind == Kind.STATE) {
+            Text(
+                "A state of mind you want to live in more. Tap the days you touch it and note what put you " +
+                    "there; days without it aren't misses. The reflection looks for it in your writing too.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         if (kind == Kind.DO) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberField(times, { times = it }, "Times", Modifier.width(90.dp))
@@ -166,9 +182,10 @@ fun HabitEditor(
         }
 
         HorizontalDivider()
-        Text("If it slips", style = MaterialTheme.typography.titleMedium)
+        Text(if (kind == Kind.STATE) "If it's been a while" else "If it slips", style = MaterialTheme.typography.titleMedium)
         Text(
-            if (kind == Kind.DO) "Each step: after this many days without it, what does it mean, and what should I ask myself?"
+            if (kind == Kind.STATE) "Each step: after this many days without feeling it, what should I ask myself?"
+            else if (kind == Kind.DO) "Each step: after this many days without it, what does it mean, and what should I ask myself?"
             else "Each step: this many slips within this many days — what does it mean, and what should I ask myself?",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -201,12 +218,21 @@ fun HabitEditor(
             ladder.add(RungDraft(Rung(days = last + 3)))
         }) { Text("+ Add step") }
 
-        HorizontalDivider()
-        Text("When it's going well", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            winAsk, { winAsk = it }, Modifier.fillMaxWidth(),
-            label = { Text("Ask me (blank = \"What's making it work?\")") },
-        )
+        if (kind == Kind.STATE) {
+            HorizontalDivider()
+            Text("What might put you there", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                ingredients, { ingredients = it }, Modifier.fillMaxWidth(),
+                label = { Text("One-tap answers, comma-separated") },
+            )
+        } else {
+            HorizontalDivider()
+            Text("When it's going well", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                winAsk, { winAsk = it }, Modifier.fillMaxWidth(),
+                label = { Text("Ask me (blank = \"What's making it work?\")") },
+            )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -226,6 +252,10 @@ fun HabitEditor(
                             goal = goal.trim(),
                             ladder = ladder.mapNotNull { it.build() }.sortedBy { rungOrder(kind, it) },
                             winAsk = winAsk.trim().ifBlank { null },
+                            ingredients = if (kind != Kind.STATE) emptyList() else ingredients.split(",")
+                                .map { it.trim() }.filter { it.isNotEmpty() }
+                                // The defaults aren't stored, so improving them later reaches this habit too.
+                                .takeIf { it != DEFAULT_INGREDIENTS }.orEmpty(),
                             auto = autoType?.takeIf { kind == Kind.DO }?.let {
                                 AutoRule(it, autoMinutes.toIntOrNull()?.coerceIn(1, 600) ?: 30)
                             },
@@ -282,7 +312,7 @@ private fun NumberField(value: String, onChange: (String) -> Unit, label: String
 
 /** Mild → serious: DO by days, AVOID by slip density. */
 private fun rungOrder(kind: Kind, r: Rung): Double =
-    if (kind == Kind.DO) r.days.toDouble() else r.slips.toDouble() / r.days
+    if (kind == Kind.AVOID) r.slips.toDouble() / r.days else r.days.toDouble()
 
 private fun defaultLadder() = listOf(
     Rung(days = 3, meaning = "Fine."),

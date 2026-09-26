@@ -13,6 +13,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.fugazi.app.R
+import com.fugazi.app.ai.Reflector
+import com.fugazi.app.sync.DriveSync
 import com.fugazi.app.sense.AutoMarker
 import com.fugazi.app.sense.Radar
 import com.fugazi.app.sense.SignalCollector
@@ -38,6 +40,9 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx,
         val fired = runChecks(applicationContext)
         Heartbeat.beat(applicationContext)
         fired.forEach { (h, e) -> CheckIns.notify(applicationContext, h, e) }
+        // Last, because it's a slow network call and nothing above should wait on it.
+        runCatching { Reflector.morning(applicationContext) }
+        runCatching { DriveSync.sync(applicationContext) }
         return Result.success()
     }
 }
@@ -85,7 +90,7 @@ object Heartbeat {
 }
 
 object CheckIns {
-    private const val CHANNEL = "checkins"
+    const val CHANNEL = "checkins"
     private const val WORK = "fugazi_checkins"
     private const val OLD_RADAR_WORK = "fugazi_daily_radar"
     const val EXTRA_OPEN_CHECKINS = "open_checkins"
@@ -152,7 +157,7 @@ fun describe(h: Habit, e: Event): Prompt {
     val rung = e.rung?.takeIf { it >= 0 }?.let { h.ladder.getOrNull(it) }
     if (rung == null) {
         val what = when (h.kind) {
-            Kind.DO -> "On pace for the last ${e.days ?: DO_WIN_WINDOW} days."
+            Kind.DO, Kind.STATE -> "On pace for the last ${e.days ?: DO_WIN_WINDOW} days."
             Kind.AVOID -> "${e.days ?: 0} days clean."
         }
         return Prompt(
@@ -165,6 +170,7 @@ fun describe(h: Habit, e: Event): Prompt {
     }
     val span = when (h.kind) {
         Kind.DO -> "${rung.days}+ days without it"
+        Kind.STATE -> "${rung.days}+ days since you felt it"
         Kind.AVOID -> "${rung.slips} in the last ${rung.days} days"
     }
     return Prompt(

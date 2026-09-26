@@ -8,6 +8,11 @@
         tools:ignore="ProtectedPermissions" />
     <!-- Needed to post the single intervention notification on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Only for the daily reflection (Kimi API), and only once a key is added. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- A reflection you ask for keeps running after you leave the app (Kimi can take minutes). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Lets the home screen ask to be exempt from battery optimisation; v1 died silently without it. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -33,6 +38,7 @@
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.Fugazi">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -76,5 +82,9 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
     </application>
 </manifest>

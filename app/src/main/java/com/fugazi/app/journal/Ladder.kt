@@ -51,7 +51,7 @@ fun reduce(habit: Habit, events: List<Event>, today: LocalDate): HabitState {
     }
     val created = LocalDate.parse(habit.created)
     val lapse = when (habit.kind) {
-        Kind.DO -> {
+        Kind.DO, Kind.STATE -> {
             val anchor = done.filter { it <= today }.maxOrNull() ?: created
             daysBetween(anchor, today).count { it !in skips }
         }
@@ -63,7 +63,7 @@ fun reduce(habit: Habit, events: List<Event>, today: LocalDate): HabitState {
     val rung = habit.ladder.indices.lastOrNull { i ->
         val r = habit.ladder[i]
         when (habit.kind) {
-            Kind.DO -> lapse >= r.days
+            Kind.DO, Kind.STATE -> lapse >= r.days
             Kind.AVOID -> slipsWithin(slips, today, r.days) >= r.slips
         }
     }
@@ -85,7 +85,7 @@ fun nextTrigger(state: HabitState, events: List<Event>, today: LocalDate): Event
     val reached = state.rung
     if (reached != null && h.ladder[reached].ask != null) {
         val episodeStart = when (h.kind) {
-            Kind.DO -> state.done.filter { it <= today }.maxOrNull() ?: LocalDate.parse(h.created)
+            Kind.DO, Kind.STATE -> state.done.filter { it <= today }.maxOrNull() ?: LocalDate.parse(h.created)
             Kind.AVOID -> today.minusDays(h.ladder[reached].days.toLong())
         }
         val already = firedSince(episodeStart) { (it.rung ?: WIN_RUNG) >= reached }
@@ -93,6 +93,8 @@ fun nextTrigger(state: HabitState, events: List<Event>, today: LocalDate): Event
     }
 
     return when (h.kind) {
+        // A state isn't something to keep a streak of.
+        Kind.STATE -> null
         Kind.DO -> {
             val created = LocalDate.parse(h.created)
             val oldEnough = !created.isAfter(today.minusDays((DO_WIN_WINDOW - 1).toLong()))
@@ -161,7 +163,7 @@ private fun strength(
     while (!d.isAfter(today)) {
         if (d !in skips) {
             val value = when (h.kind) {
-                Kind.DO -> {
+                Kind.DO, Kind.STATE -> {
                     val windowStart = d.minusDays(h.target.days.toLong())
                     val n = done.count { it > windowStart && it <= d }
                     (n.toDouble() / h.target.times).coerceAtMost(1.0)
